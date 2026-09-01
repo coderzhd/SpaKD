@@ -1,0 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch==2.4.1
+numpy==1.26.3
+pandas==2.2.3
+scipy==1.14.1
+scanpy==1.10.4
+scikit-learn==1.6.0
+tqdm==4.66.5

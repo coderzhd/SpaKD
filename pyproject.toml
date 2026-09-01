@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spakd"
+version = "0.1.0"
+description = "SpaKD: multi-level knowledge distillation for reference-guided spatial transcriptomics imputation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.14",
+    "scanpy>=1.10",
+    "torch>=2.4",
+]
+
+[project.scripts]
+spakd-kfold = "spakd.train_kfold:main"
+
+[tool.setuptools.packages.find]
+include = ["spakd*"]
