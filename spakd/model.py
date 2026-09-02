@@ -34,7 +34,7 @@ class SpaKDConfig:
     student_hidden_dims: Tuple[int, ...] = (512, 256)
     teacher_hidden_dims: Tuple[int, ...] = (512, 256)
     num_bases: int = 64
-    dropout: float = 0.026180677070756372
+    dropout: float = 0.03
     activation: str = "relu"
     basis_temperature: float = 1.0
     use_basis_norm: bool = True
@@ -43,7 +43,7 @@ class SpaKDConfig:
     projection_dim: int = 128
     projection_hidden_dim: int = 256
 
-    lr: float = 0.0003713287125770932
+    lr: float = 0.0001
     beta1: float = 0.9
     beta2: float = 0.999
     gpu: int = 0
