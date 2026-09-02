@@ -11,15 +11,44 @@ import torch
 from torch.utils.data import Dataset
 
 
-def load_h5ad(path: str, min_cells: int = 3, min_genes: int = 3):
-    """Load and lightly filter an AnnData file."""
-
-    adata = sc.read(path)
-    sc.pp.filter_genes(adata, min_cells=min_cells)
-    sc.pp.filter_cells(adata, min_genes=min_genes)
+def _ensure_log1p(adata):
     if "log1p" not in adata.uns_keys():
         sc.pp.log1p(adata)
     return adata
+
+
+def _filter_genes_by_cell_fraction(adata, min_cell_fraction: float):
+    if min_cell_fraction <= 0:
+        return adata
+
+    matrix = adata.X
+    if hasattr(matrix, "getnnz"):
+        expressed = np.asarray(matrix.getnnz(axis=0)).reshape(-1)
+    else:
+        expressed = np.count_nonzero(np.asarray(matrix), axis=0)
+
+    keep = expressed >= min_cell_fraction * adata.n_obs
+    if not np.any(keep):
+        raise ValueError(
+            "No scRNA-seq genes remain after applying "
+            f"min_cell_fraction={min_cell_fraction}"
+        )
+    return adata[:, keep].copy()
+
+
+def load_h5ad(path: str):
+    """Load an AnnData file and apply log1p transformation when needed."""
+
+    adata = sc.read(path)
+    return _ensure_log1p(adata)
+
+
+def load_scrna_reference(path: str, min_cell_fraction: float = 0.1):
+    """Load scRNA-seq reference data with the manuscript gene filter."""
+
+    adata = sc.read(path)
+    adata = _filter_genes_by_cell_fraction(adata, min_cell_fraction)
+    return _ensure_log1p(adata)
 
 
 def _ordered_intersection(candidates: Iterable[str], allowed: Sequence[str]) -> List[str]:
@@ -54,11 +83,12 @@ class SpaKDDataset(Dataset):
         dataset_name: str,
         fold: int,
         split: str = "train",
-        cluster_key: str = "merge_cell_type",
+        cluster_key: str = "leiden",
         train_list_name: str = "train_list.npy",
         test_list_name: str = "test_list.npy",
-        min_cells: int = 3,
-        min_genes: int = 3,
+        min_sc_cell_fraction: float = 0.1,
+        leiden_resolution: float = 1.0,
+        leiden_random_state: int = 0,
     ) -> None:
         if split not in {"train", "val"}:
             raise ValueError("split must be 'train' or 'val'")
@@ -68,12 +98,17 @@ class SpaKDDataset(Dataset):
         self.fold = fold
         self.split = split
         self.cluster_key = cluster_key
+        self.leiden_resolution = leiden_resolution
+        self.leiden_random_state = leiden_random_state
         self.dataset_dir = os.path.join(root, dataset_name)
 
         self.sc_path = os.path.join(self.dataset_dir, "scRNA_count_cluster.h5ad")
         self.st_path = os.path.join(self.dataset_dir, "Insitu_count.h5ad")
-        self.sc_adata = load_h5ad(self.sc_path, min_cells=min_cells, min_genes=min_genes)
-        self.st_adata = load_h5ad(self.st_path, min_cells=min_cells, min_genes=min_genes)
+        self.sc_adata = load_scrna_reference(
+            self.sc_path,
+            min_cell_fraction=min_sc_cell_fraction,
+        )
+        self.st_adata = load_h5ad(self.st_path)
 
         self.reference_group_codes = self._reference_group_codes()
         self.aggregated_reference = self._aggregate_reference_profiles()
@@ -134,6 +169,9 @@ class SpaKDDataset(Dataset):
         return int(len(np.unique(self.reference_group_codes)))
 
     def _reference_group_codes(self) -> np.ndarray:
+        if self.cluster_key == "leiden" and self.cluster_key not in self.sc_adata.obs:
+            self._run_leiden_clustering()
+
         if self.cluster_key not in self.sc_adata.obs:
             available = ", ".join(map(str, self.sc_adata.obs_keys()))
             raise KeyError(
@@ -142,6 +180,19 @@ class SpaKDDataset(Dataset):
             )
         labels = self.sc_adata.obs[self.cluster_key].astype("category")
         return labels.cat.codes.to_numpy(dtype=np.int64)
+
+    def _run_leiden_clustering(self) -> None:
+        n_pcs = min(50, self.sc_adata.n_obs - 1, self.sc_adata.n_vars - 1)
+        if n_pcs < 1:
+            raise ValueError("Leiden clustering requires at least two cells and two genes")
+        sc.pp.pca(self.sc_adata, n_comps=n_pcs)
+        sc.pp.neighbors(self.sc_adata, n_pcs=n_pcs)
+        sc.tl.leiden(
+            self.sc_adata,
+            key_added=self.cluster_key,
+            resolution=self.leiden_resolution,
+            random_state=self.leiden_random_state,
+        )
 
     def _aggregate_reference_profiles(self):
         matrix = self.sc_adata.X

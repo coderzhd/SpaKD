@@ -51,12 +51,6 @@ class SpaKDConfig:
 
     lambda_student_rec: float = 1.0
     lambda_teacher_rec: float = 0.5
-    lambda_l1: float = 0.4151231486567266
-    lambda_student_coarse: float = 0.3
-    lambda_latent_mse: float = 0.5
-    lambda_coarse_mse: float = 0.3
-    lambda_residual: float = 0.001
-    lambda_basis_diversity: float = 0.0
 
     lambda_scd: float = 0.3
     scd_margin: float = 1.0
@@ -311,7 +305,6 @@ class SpaKDNetwork(nn.Module):
                     "teacher_residual": teacher["residual"],
                     "teacher_pred": teacher["pred"],
                     "teacher_z": self.teacher_projection(h_t),
-                    "teacher_z_detach": self.teacher_projection(h_t.detach()),
                 }
             )
 
@@ -351,7 +344,7 @@ def global_relational_distillation_loss(
     h_t = F.normalize(h_t.detach(), dim=1)
     sim_s = h_s @ h_s.T
     sim_t = h_t @ h_t.T
-    return F.mse_loss(sim_s, sim_t)
+    return (sim_s - sim_t).pow(2).sum()
 
 
 def expression_prototype_distillation_loss(
@@ -385,7 +378,7 @@ def expression_prototype_distillation_loss(
 
     sim_s = h_s_norm @ proto_s_norm.T
     sim_t = h_t_norm @ proto_t_norm.T
-    return F.mse_loss(sim_s, sim_t)
+    return (sim_s - sim_t).pow(2).sum()
 
 
 def _build_group_prototypes(
@@ -401,11 +394,12 @@ def _build_group_prototypes(
     return prototypes
 
 
-def _basis_diversity_loss(bases: torch.Tensor) -> torch.Tensor:
-    normalized = F.normalize(bases, dim=1)
-    gram = normalized @ normalized.T
-    off_diag = gram - torch.diag_embed(torch.diagonal(gram))
-    return off_diag.pow(2).mean()
+def _batch_squared_l2_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Return 1/N sum_i ||pred_i - target_i||_2^2."""
+
+    if pred.size(0) == 0:
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+    return (pred - target).pow(2).sum(dim=1).mean()
 
 
 class SpaKDModule(nn.Module):
@@ -428,8 +422,6 @@ class SpaKDModule(nn.Module):
             lr=config.lr,
             betas=(config.beta1, config.beta2),
         )
-        self.mse_loss = nn.MSELoss()
-        self.l1_loss = nn.L1Loss()
 
         self.scx: Optional[torch.Tensor] = None
         self.stx: Optional[torch.Tensor] = None
@@ -479,24 +471,15 @@ class SpaKDModule(nn.Module):
         h_s = self.out["student_latent"]
         h_t = self.out["teacher_latent"]
         student_pred = self.out["student_pred"]
-        student_coarse = self.out["student_coarse"]
-        student_residual = self.out["student_residual"]
         teacher_pred = self.out["teacher_pred"]
-        teacher_coarse = self.out["teacher_coarse"]
-        teacher_residual = self.out["teacher_residual"]
 
-        student_mse = self.mse_loss(student_pred, self.stx)
-        student_l1 = self.l1_loss(student_pred, self.stx)
-        student_coarse_mse = self.mse_loss(student_coarse, self.stx)
-        teacher_mse = self.mse_loss(teacher_pred, self.stx)
-        latent_mse = self.mse_loss(h_s, h_t.detach())
-        coarse_mse = self.mse_loss(student_coarse, teacher_coarse.detach())
-        residual_penalty = student_residual.abs().mean() + teacher_residual.abs().mean()
+        student_rec = _batch_squared_l2_loss(student_pred, self.stx)
+        teacher_rec = _batch_squared_l2_loss(teacher_pred, self.stx)
 
         n0 = self.n_original
         scd_loss, scd_pos, scd_neg = sample_contrastive_distillation_loss(
             self.out["student_z"][:n0],
-            self.out["teacher_z_detach"][:n0],
+            self.out["teacher_z"][:n0],
             margin=self.config.scd_margin,
         )
         grd_loss = global_relational_distillation_loss(h_s[:n0], h_t[:n0])
@@ -510,37 +493,23 @@ class SpaKDModule(nn.Module):
                 self.gene_group[:n0],
             )
 
-        network = self._unwrap()
-        basis_diversity = _basis_diversity_loss(network.student_decoder.bases)
-        if network.teacher_decoder is not network.student_decoder:
-            basis_diversity = basis_diversity + _basis_diversity_loss(
-                network.teacher_decoder.bases
-            )
-
-        self.loss = (
-            self.config.lambda_student_rec * student_mse
-            + self.config.lambda_teacher_rec * teacher_mse
-            + self.config.lambda_l1 * student_l1
-            + self.config.lambda_student_coarse * student_coarse_mse
-            + self.config.lambda_latent_mse * latent_mse
-            + self.config.lambda_coarse_mse * coarse_mse
-            + self.config.lambda_residual * residual_penalty
-            + self.config.lambda_basis_diversity * basis_diversity
-            + self.config.lambda_scd * scd_loss
+        kd_loss = (
+            self.config.lambda_scd * scd_loss
             + self.config.lambda_grd * grd_loss
             + self.config.lambda_epd * epd_loss
         )
 
+        self.loss = (
+            self.config.lambda_student_rec * student_rec
+            + self.config.lambda_teacher_rec * teacher_rec
+            + kd_loss
+        )
+
         self.loss_stat = {
             "loss": float(self.loss.detach().cpu()),
-            "student_mse": float(student_mse.detach().cpu()),
-            "teacher_mse": float(teacher_mse.detach().cpu()),
-            "student_l1": float(student_l1.detach().cpu()),
-            "student_coarse_mse": float(student_coarse_mse.detach().cpu()),
-            "latent_mse": float(latent_mse.detach().cpu()),
-            "coarse_mse": float(coarse_mse.detach().cpu()),
-            "residual_penalty": float(residual_penalty.detach().cpu()),
-            "basis_diversity": float(basis_diversity.detach().cpu()),
+            "student_rec": float(student_rec.detach().cpu()),
+            "teacher_rec": float(teacher_rec.detach().cpu()),
+            "kd": float(kd_loss.detach().cpu()),
             "scd": float(scd_loss.detach().cpu()),
             "scd_pos": float(scd_pos.detach().cpu()),
             "scd_neg": float(scd_neg.detach().cpu()),

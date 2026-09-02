@@ -21,7 +21,7 @@ scripts/
 docs/
   method_mapping.md
 tests/
-  test_model_smoke.py
+  test_model_objective.py
 ```
 
 ## Installation
@@ -54,13 +54,29 @@ dataset/
     ...
 ```
 
-The scRNA-seq AnnData file should contain a cell-group annotation in `.obs`. By default SpaKD uses `merge_cell_type`:
+SpaKD filters out scRNA-seq genes expressed in fewer than 10% of reference cells, then applies `log1p` to both the scRNA-seq reference and ST matrices when they are not already marked as log-transformed.
+
+The scRNA-seq AnnData file may contain a precomputed Leiden annotation in `.obs`. By default SpaKD uses `leiden`; if this key is absent, it computes Leiden groups from the scRNA-seq reference:
 
 ```bash
---cluster_key merge_cell_type
+--cluster_key leiden --leiden_resolution 1.0 --leiden_random_state 0
 ```
 
 For each gene, SpaKD builds the EPD label by aggregating scRNA-seq expression across reference groups and assigning the gene to the group with maximal aggregated expression.
+
+## Training Objective
+
+The public implementation follows the manuscript objective directly:
+
+```text
+L = lambda_student_rec * L_rec^s
+  + lambda_teacher_rec * L_rec^t
+  + lambda_scd * L_SCD
+  + lambda_grd * L_GRD
+  + lambda_epd * L_EPD
+```
+
+`L_rec^s` and `L_rec^t` are computed as the mini-batch mean of per-gene squared L2 reconstruction errors. `L_GRD` and `L_EPD` use squared Frobenius differences between the corresponding similarity matrices. Earlier exploratory losses from the development code, such as direct latent matching, coarse-output matching, L1 reconstruction, residual penalties, basis-diversity regularization, and random feature-masking augmentation, are not part of this cleaned manuscript-aligned training objective.
 
 ## Training
 
@@ -73,6 +89,8 @@ python scripts/run_spakd_kfold.py \
   --folds 0 1 2 3 4 5 6 7 8 9 \
   --epochs 50 \
   --batch_size 64 \
+  --lambda_student_rec 1.0 \
+  --lambda_teacher_rec 0.5 \
   --save_root ./SpaKD_results
 ```
 

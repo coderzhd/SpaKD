@@ -31,30 +31,6 @@ def seed_everything(seed: int = 42) -> None:
     torch.use_deterministic_algorithms(True, warn_only=True)
 
 
-def augment_training_batch(
-    sc_profile: torch.Tensor,
-    st_profile: torch.Tensor,
-    gene_group: torch.Tensor,
-    times: int = 4,
-    zero_fraction: float = 0.25403000434604417,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Augment the scRNA-derived profile by random feature masking."""
-
-    if times <= 1:
-        return sc_profile, st_profile, gene_group
-
-    sc_batches = [sc_profile]
-    for _ in range(times - 1):
-        mask = torch.rand(sc_profile.shape, device=sc_profile.device) < zero_fraction
-        sc_batches.append(torch.where(mask, torch.zeros_like(sc_profile), sc_profile))
-
-    return (
-        torch.cat(sc_batches, dim=0),
-        torch.cat([st_profile] * times, dim=0),
-        torch.cat([gene_group] * times, dim=0),
-    )
-
-
 def build_loader(dataset: SpaKDDataset, batch_size: int, shuffle: bool, seed: int):
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -84,12 +60,8 @@ def config_from_args(args: argparse.Namespace, dataset: SpaKDDataset) -> SpaKDCo
         beta2=args.beta2,
         gpu=args.gpu,
         parallel=args.parallel,
+        lambda_student_rec=args.lambda_student_rec,
         lambda_teacher_rec=args.lambda_teacher_rec,
-        lambda_l1=args.lambda_l1,
-        lambda_student_coarse=args.lambda_student_coarse,
-        lambda_latent_mse=args.lambda_latent_mse,
-        lambda_coarse_mse=args.lambda_coarse_mse,
-        lambda_residual=args.lambda_residual,
         lambda_scd=args.lambda_scd,
         scd_margin=args.scd_margin,
         lambda_grd=args.lambda_grd,
@@ -111,6 +83,9 @@ def train_one_fold(
         cluster_key=args.cluster_key,
         train_list_name=args.train_list_name,
         test_list_name=args.test_list_name,
+        min_sc_cell_fraction=args.min_sc_cell_fraction,
+        leiden_resolution=args.leiden_resolution,
+        leiden_random_state=args.leiden_random_state,
     )
     loader = build_loader(dataset, args.batch_size, shuffle=True, seed=args.seed)
     config = config_from_args(args, dataset)
@@ -121,13 +96,6 @@ def train_one_fold(
         n_batches = 0
         for sc_profile, st_profile, gene_group in loader:
             n_original = int(sc_profile.size(0))
-            sc_profile, st_profile, gene_group = augment_training_batch(
-                sc_profile,
-                st_profile,
-                gene_group,
-                times=args.aug_times,
-                zero_fraction=args.zero_fraction,
-            )
             module.set_input(
                 {
                     "scx": sc_profile,
@@ -174,6 +142,9 @@ def validate_one_fold(
         cluster_key=args.cluster_key,
         train_list_name=args.train_list_name,
         test_list_name=args.test_list_name,
+        min_sc_cell_fraction=args.min_sc_cell_fraction,
+        leiden_resolution=args.leiden_resolution,
+        leiden_random_state=args.leiden_random_state,
     )
     loader = build_loader(dataset, args.batch_size, shuffle=False, seed=args.seed)
     if config is None:
@@ -311,7 +282,10 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--root", type=str, default="./dataset")
     parser.add_argument("--dataset_ids", type=int, nargs="+", default=[1])
     parser.add_argument("--folds", type=int, nargs="+", default=list(range(10)))
-    parser.add_argument("--cluster_key", type=str, default="merge_cell_type")
+    parser.add_argument("--cluster_key", type=str, default="leiden")
+    parser.add_argument("--min_sc_cell_fraction", type=float, default=0.1)
+    parser.add_argument("--leiden_resolution", type=float, default=1.0)
+    parser.add_argument("--leiden_random_state", type=int, default=0)
     parser.add_argument("--train_list_name", type=str, default="train_list.npy")
     parser.add_argument("--test_list_name", type=str, default="test_list.npy")
     parser.add_argument("--save_root", type=str, default="./SpaKD_results")
@@ -335,15 +309,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.0003713287125770932)
     parser.add_argument("--beta1", type=float, default=0.9)
     parser.add_argument("--beta2", type=float, default=0.999)
-    parser.add_argument("--aug_times", type=int, default=4)
-    parser.add_argument("--zero_fraction", type=float, default=0.25403000434604417)
-
+    parser.add_argument("--lambda_student_rec", type=float, default=1.0)
     parser.add_argument("--lambda_teacher_rec", type=float, default=0.5)
-    parser.add_argument("--lambda_l1", type=float, default=0.4151231486567266)
-    parser.add_argument("--lambda_student_coarse", type=float, default=0.3)
-    parser.add_argument("--lambda_latent_mse", type=float, default=0.5)
-    parser.add_argument("--lambda_coarse_mse", type=float, default=0.3)
-    parser.add_argument("--lambda_residual", type=float, default=0.001)
     parser.add_argument("--lambda_scd", type=float, default=0.3)
     parser.add_argument("--scd_margin", type=float, default=1.0)
     parser.add_argument("--lambda_grd", type=float, default=0.1)

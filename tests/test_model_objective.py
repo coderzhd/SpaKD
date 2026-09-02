@@ -29,3 +29,14 @@ def test_spakd_forward_and_loss():
     assert out["student_pred"].shape == (batch_size, config.st_dim)
     loss = module.compute_loss()
     assert torch.isfinite(loss)
+    assert {
+        "loss",
+        "student_rec",
+        "teacher_rec",
+        "kd",
+        "scd",
+        "grd",
+        "epd",
+    }.issubset(module.get_current_loss())
+    assert "student_l1" not in module.get_current_loss()
+    assert "latent_mse" not in module.get_current_loss()
