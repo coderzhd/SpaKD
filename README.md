@@ -39,6 +39,28 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Datasets
+
+SpaKD was evaluated on the same 53 paired scRNA-seq and spatial
+transcriptomics datasets used in SpaIM.
+
+The processed datasets used in our experiments were obtained from
+the public SpaIM data resource:
+
+- SpaIM:
+  https://github.com/QSong-github/SpaIM
+
+SpaIM extends the 45-dataset transcript-distribution prediction
+benchmark introduced by Li et al. (2022) with eight additional
+high-resolution imaging-based spatial transcriptomics datasets.
+
+- Original SpatialBenchmarking resource:
+  https://github.com/QuKunLab/SpatialBenchmarking
+
+For detailed platform, tissue, and dataset-size information of the
+53 datasets used in SpaKD, please refer to Supplementary Table S1
+of our manuscript.
+
 ## Data Layout
 
 SpaKD expects each benchmark dataset to use the following structure:
